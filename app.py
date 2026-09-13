@@ -234,15 +234,114 @@ def fao_signal():
         return {"ok":False}
 
 
+
+def dynamic_potentials(name, articles, cfg):
+    """
+    Make the worse/better/watch text respond to the actual live headlines.
+    Falls back to the category defaults only when no specific scenario is detected.
+    """
+    blob = " ".join(a.get("title", "").lower() for a in articles)
+
+    # WAR / GEOPOLITICS
+    if name == "War / Geopolitics":
+        if any(k in blob for k in ["iran", "israel", "hormuz", "gulf"]):
+            return {
+                "up": "Direct Iran–Israel escalation, attacks on Gulf energy infrastructure, a Hormuz disruption, or another country entering the fighting.",
+                "down": "A verified ceasefire, sustained drop in strikes, reopening/normal shipping through Hormuz, or credible direct negotiations.",
+                "next": "Whether attacks spread to Gulf infrastructure or shipping — especially Hormuz — and whether new states become directly involved."
+            }
+        if any(k in blob for k in ["russia", "ukraine", "nato"]):
+            return {
+                "up": "Direct NATO–Russia confrontation, a major new mobilization, wider strikes outside Ukraine, or nuclear escalation.",
+                "down": "A durable ceasefire, negotiated territorial/security framework, demobilization, or sustained fall in long-range strikes.",
+                "next": "Whether the war expands geographically or pulls NATO forces into direct combat."
+            }
+        if any(k in blob for k in ["taiwan", "china", "south china sea"]):
+            return {
+                "up": "A blockade, invasion preparations, direct U.S.–China military confrontation, or prolonged closure of major shipping lanes.",
+                "down": "Military stand-downs, reopened communications, fewer exercises near Taiwan, and restored commercial shipping confidence.",
+                "next": "Whether military exercises turn into a real blockade or sustained disruption of Taiwan-area shipping."
+            }
+
+    # ENERGY
+    if name == "Energy":
+        if any(k in blob for k in ["hormuz", "iran", "gulf", "tanker"]):
+            return {
+                "up": "A sustained Hormuz closure, tanker attacks, loss of Gulf export capacity, or refinery/pipeline damage that removes real barrels from the market.",
+                "down": "Normal tanker traffic resumes, damaged export infrastructure returns, producers replace lost supply, and prices/insurance costs ease.",
+                "next": "Actual physical export losses — not just threats — and whether tanker traffic through Hormuz stays normal."
+            }
+        if any(k in blob for k in ["refinery", "pipeline", "lng"]):
+            return {
+                "up": "Multiple large refinery, pipeline, or LNG outages occurring at the same time and lasting long enough to create shortages.",
+                "down": "Facilities restart, inventories rebuild, shipping normalizes, and replacement supply reaches affected markets.",
+                "next": "Whether current outages become prolonged physical shortages instead of temporary disruptions."
+            }
+
+    # ECONOMY
+    if name == "Economy":
+        if any(k in blob for k in ["oil", "inflation", "energy prices"]):
+            return {
+                "up": "A sustained energy-price spike that pushes inflation back up, forces tighter policy, and weakens consumer/industrial demand.",
+                "down": "Energy prices stabilize, inflation expectations stay contained, credit remains available, and employment holds up.",
+                "next": "Whether the current energy/geopolitical shock starts showing up in inflation, credit spreads, layoffs, or consumer spending."
+            }
+        if any(k in blob for k in ["bank", "credit", "default"]):
+            return {
+                "up": "Contagion to additional banks/borrowers, frozen credit markets, rising defaults, or emergency liquidity measures.",
+                "down": "Deposit/credit stress fades, funding markets normalize, and defaults remain contained.",
+                "next": "Whether isolated financial stress spreads into broader credit markets."
+            }
+
+    # CLIMATE
+    if name == "Climate":
+        if any(k in blob for k in ["heat", "drought", "wildfire", "flood", "hurricane", "cyclone"]):
+            return {
+                "up": "Several major regions suffering severe heat, drought, flood, fire, or storm damage at the same time — especially where food or power systems are vulnerable.",
+                "down": "Hazards remain localized, seasonal forecasts moderate, reservoirs/crops improve, and infrastructure recovers quickly.",
+                "next": "Whether current extremes begin causing multi-region food, power, insurance, or infrastructure losses."
+            }
+
+    # FOOD
+    if name == "Food":
+        if any(k in blob for k in ["wheat", "rice", "corn", "crop", "fertilizer", "export"]):
+            return {
+                "up": "Major exporters restricting trade, multiple crop failures, fertilizer shortages, or shipping disruptions hitting staple-food supply.",
+                "down": "Strong harvests, reopened export routes, lower fertilizer/energy costs, and easing staple-food prices.",
+                "next": "Whether current weather/trade disruptions hit major staple exporters at the same time."
+            }
+
+    # AI
+    if name == "AI":
+        if any(k in blob for k in ["agent", "autonomous", "cyber", "bio", "safety"]):
+            return {
+                "up": "Reliable long-horizon autonomy, real-world safeguard bypass, consequential AI-enabled cyber/bio misuse, or systems acquiring resources without close human control.",
+                "down": "Independent evaluations show controls working, dangerous capabilities plateau, and major labs/governments adopt enforceable safeguards.",
+                "next": "Evidence that advanced models can autonomously execute long, consequential real-world tasks — not just score well on benchmarks."
+            }
+
+    # INFRASTRUCTURE / CYBER
+    if name == "Infrastructure / Cyber":
+        if any(k in blob for k in ["grid", "blackout", "ransomware", "telecom", "port", "pipeline"]):
+            return {
+                "up": "Simultaneous or cascading outages across grids, telecoms, ports, pipelines, or payments — especially if recovery takes days rather than hours.",
+                "down": "Systems recover quickly, attacks stay localized, backups work, and no cross-sector cascade develops.",
+                "next": "Whether a local outage/attack starts spreading into other critical systems or regions."
+            }
+
+    return {"up": cfg["up"], "down": cfg["down"], "next": cfg["next"]}
+
+
 def score_news(name, cfg, articles, source_state, previous=None):
     if not articles:
         # Critical rule: source failure is NOT zero risk.
         keep = previous if previous is not None else cfg["base"]
+        p = dynamic_potentials(name, [], cfg)
         return {
             "name":name,"emoji":cfg["emoji"],"score":round(keep*2)/2,
             "trend":"→ Unchanged (data unavailable)",
             "summary":"Fresh news data is unavailable. Keeping the last known/baseline score — not treating missing data as good news.",
-            "next_risk":cfg["next"],"raises_score":cfg["up"],"lowers_score":cfg["down"],
+            "next_risk":p["next"],"raises_score":p["up"],"lowers_score":p["down"],
             "signals":[],"data_status":"unavailable"
         }
 
@@ -254,11 +353,12 @@ def score_news(name, cfg, articles, source_state, previous=None):
     adjustment = min(2.0, bad * .35) - min(1.0, good * .25)
     score = round(clamp(cfg["base"] + adjustment)*2)/2
 
+    p = dynamic_potentials(name, articles, cfg)
     return {
         "name":name,"emoji":cfg["emoji"],"score":score,
         "trend":trend(score, previous),
         "summary":f"Fresh public-news signals: {len(articles)} items checked; {bad} escalation terms and {good} easing terms detected.",
-        "next_risk":cfg["next"],"raises_score":cfg["up"],"lowers_score":cfg["down"],
+        "next_risk":p["next"],"raises_score":p["up"],"lowers_score":p["down"],
         "signals":articles[:5],"data_status":source_state
     }
 
@@ -391,7 +491,7 @@ def render(report):
             if i+j>=len(cats): break
             x=cats[i+j]; sc=x["score"]
             status_class = "down" if x["data_status"]=="unavailable" else ("partial" if x["data_status"] in ("fallback","official only") else "live")
-            status_text = "DATA UNAVAILABLE" if x["data_status"]=="unavailable" else x["data_status"].upper()
+            status_text = ("DATA UNAVAILABLE" if x["data_status"]=="unavailable" else "LIVE NEWS" if x["data_status"]=="fallback" else x["data_status"].upper())
             with col:
                 st.html(f"""
                 <div class="card">
