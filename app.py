@@ -405,11 +405,23 @@ def render(report):
                   </div>
                   <div class="{status_class}" style="font-size:.72rem;font-weight:800">{status_text}</div>
                   <div class="muted" style="margin-top:.5rem">{x["summary"]}</div>
+
+                  <div style="margin-top:1rem;padding-top:.85rem;border-top:1px solid #29323b">
+                    <div style="margin-bottom:.65rem">
+                      <b style="color:#ff8b8b">⬆️ What could make it worse</b><br>
+                      <span class="muted">{x["raises_score"]}</span>
+                    </div>
+                    <div style="margin-bottom:.65rem">
+                      <b style="color:#76df9d">⬇️ What could make it better</b><br>
+                      <span class="muted">{x["lowers_score"]}</span>
+                    </div>
+                    <div>
+                      <b style="color:#f2d964">👀 What to watch next</b><br>
+                      <span class="muted">{x["next_risk"]}</span>
+                    </div>
+                  </div>
                 </div>""")
-                with st.expander("Why this score + sources"):
-                    st.markdown(f"**Raises score:** {x['raises_score']}")
-                    st.markdown(f"**Lowers score:** {x['lowers_score']}")
-                    st.markdown(f"**Next plausible risk:** {x['next_risk']}")
+                with st.expander("Sources"):
                     if x["signals"]:
                         st.markdown("**Fresh signals:**")
                         for art in x["signals"]:
