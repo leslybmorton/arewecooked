@@ -1,7 +1,17 @@
-import streamlit as st
+import json
+import textwrap
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 import pandas as pd
 import plotly.express as px
-from datetime import datetime
+import streamlit as st
+from openai import OpenAI
+
+
+# ============================================================
+# PAGE CONFIG
+# ============================================================
 
 st.set_page_config(
     page_title="Are We Cooked? 🌍",
@@ -10,9 +20,13 @@ st.set_page_config(
     initial_sidebar_state="collapsed",
 )
 
-# ---------------------------------------------------------
+PACIFIC = ZoneInfo("America/Los_Angeles")
+MODEL = "gpt-5.6-luna"
+
+
+# ============================================================
 # STYLES
-# ---------------------------------------------------------
+# ============================================================
 
 st.markdown(
     """
@@ -55,17 +69,13 @@ st.markdown(
             color: #b7c0c8;
             font-size: 1.03rem;
             line-height: 1.6;
-            max-width: 780px;
-            margin-bottom: 1.3rem;
+            max-width: 820px;
+            margin-bottom: 1rem;
         }
 
         .panel {
             background:
-                linear-gradient(
-                    180deg,
-                    rgba(255,255,255,.025),
-                    rgba(255,255,255,.01)
-                ),
+                linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,.01)),
                 #12161b;
             border: 1px solid #26303a;
             border-radius: 22px;
@@ -76,11 +86,7 @@ st.markdown(
 
         .metric-card {
             background:
-                linear-gradient(
-                    180deg,
-                    rgba(255,255,255,.025),
-                    rgba(255,255,255,.01)
-                ),
+                linear-gradient(180deg, rgba(255,255,255,.025), rgba(255,255,255,.01)),
                 #12161b;
             border: 1px solid #26303a;
             border-radius: 20px;
@@ -149,7 +155,7 @@ st.markdown(
         .section-title {
             font-size: 1.8rem;
             font-weight: 800;
-            margin-top: 1.5rem;
+            margin-top: 1.6rem;
             margin-bottom: .8rem;
         }
 
@@ -191,249 +197,30 @@ st.markdown(
             font-size: .8rem;
             margin-top: .35rem;
         }
+
+        a {
+            color: #7fd1c8 !important;
+        }
     </style>
     """,
     unsafe_allow_html=True,
 )
 
-# ---------------------------------------------------------
-# DATA
-# ---------------------------------------------------------
 
-AS_OF = "September 13, 2026"
-
-OVERALL_SCORE = 6.5
-OVERALL_STATUS = "SERIOUS"
-OVERALL_TREND = "↗ Worsening"
-
-OVERALL_SUMMARY = (
-    "Global systems are under unusually high, interconnected stress. "
-    "A catastrophe is not currently unfolding, but war and energy disruption "
-    "have created credible pathways to wider economic and infrastructure problems."
-)
-
-categories = [
-    {
-        "emoji": "🛢️",
-        "name": "Energy",
-        "score": 8.0,
-        "trend": "↑ Worsening quickly",
-        "summary": (
-            "Hormuz shipping is severely disrupted while Saudi bypass capacity is "
-            "impaired, reducing the system's ability to reroute lost exports."
-        ),
-        "next": (
-            "Physical fuel shortages, rationing in vulnerable markets, industrial "
-            "cutbacks and higher transport and food costs."
-        ),
-        "up": (
-            "Pipeline stays offline into the inventory window; Bab el-Mandeb closes "
-            "substantially; more Gulf export infrastructure is lost."
-        ),
-        "down": (
-            "East-West pipeline restored; meaningful Hormuz shipping resumes; "
-            "negotiated safe passage holds."
-        ),
-    },
-    {
-        "emoji": "⚔️",
-        "name": "War / Geopolitics",
-        "score": 7.5,
-        "trend": "↑ Worsening quickly",
-        "summary": (
-            "The Iran conflict has expanded into attacks on shipping and regional "
-            "infrastructure while the Russia–Ukraine war remains active."
-        ),
-        "next": (
-            "Broader regional war, additional states entering combat, or sustained "
-            "attacks on critical infrastructure."
-        ),
-        "up": (
-            "Major Gulf state enters sustained combat; direct great-power "
-            "confrontation; nuclear escalation."
-        ),
-        "down": (
-            "Shipping guarantees, meaningful ceasefire activity, or sustained "
-            "reduction in attacks."
-        ),
-    },
-    {
-        "emoji": "💰",
-        "name": "Economy",
-        "score": 6.0,
-        "trend": "↗ Worsening",
-        "summary": (
-            "The energy shock is pushing inflation and uncertainty higher, but banks, "
-            "credit, payments and trade are still functioning."
-        ),
-        "next": (
-            "Stagflation or recession if expensive energy persists and physical "
-            "shortages begin suppressing production."
-        ),
-        "up": (
-            "Credit dysfunction, major bank stress, industrial shutdowns, "
-            "unemployment shock or sovereign defaults."
-        ),
-        "down": (
-            "Energy costs retreat, inflation expectations stabilize and financial "
-            "conditions normalize."
-        ),
-    },
-    {
-        "emoji": "🌡️",
-        "name": "Climate",
-        "score": 6.0,
-        "trend": "↗ Worsening",
-        "summary": (
-            "Extreme-weather risk remains elevated and can amplify food, energy and "
-            "humanitarian stresses already in motion."
-        ),
-        "next": (
-            "Simultaneous crop-region droughts, floods or heat waves while energy and "
-            "shipping buffers are already strained."
-        ),
-        "up": (
-            "Confirmed severe breadbasket impacts or major infrastructure-disrupting "
-            "weather across multiple regions."
-        ),
-        "down": (
-            "Impacts remain geographically limited and harvest forecasts improve."
-        ),
-    },
-    {
-        "emoji": "🌾",
-        "name": "Food",
-        "score": 5.0,
-        "trend": "↗ Worsening",
-        "summary": (
-            "Food prices and agricultural supply chains face pressure from energy, "
-            "transport, war and weather, but there is no worldwide physical shortage."
-        ),
-        "next": (
-            "Export restrictions and localized shortages that amplify prices elsewhere."
-        ),
-        "up": (
-            "Major export bans, fertilizer shortages, simultaneous harvest failures "
-            "or widespread physical shortages."
-        ),
-        "down": (
-            "Strong harvests, cheaper fertilizer and energy, and improved "
-            "Black Sea logistics."
-        ),
-    },
-    {
-        "emoji": "🤖",
-        "name": "AI",
-        "score": 5.0,
-        "trend": "↗ Worsening",
-        "summary": (
-            "Frontier systems are gaining autonomy-relevant capabilities, but current "
-            "systems still fall short of an actual loss-of-control scenario."
-        ),
-        "next": (
-            "Reliable long-horizon autonomy, safeguard circumvention or materially "
-            "faster AI-assisted frontier research."
-        ),
-        "up": (
-            "Sustained autonomous operation, real-world safeguard evasion, replication "
-            "or resource acquisition, or rapid AI-R&D acceleration."
-        ),
-        "down": (
-            "Capability growth slows and increasingly strong control methods remain "
-            "robust under harder evaluations."
-        ),
-    },
-    {
-        "emoji": "🏗️",
-        "name": "Infrastructure / Cyber",
-        "score": 4.5,
-        "trend": "↗ Worsening",
-        "summary": (
-            "Important regional infrastructure is being attacked, but global power, "
-            "communications, logistics and payment systems remain broadly operational."
-        ),
-        "next": (
-            "A cyber-plus-physical cascade affecting ports, grids, pipelines, telecoms "
-            "or payments across multiple countries."
-        ),
-        "up": (
-            "Multi-country grid failures, major payment disruption or destructive "
-            "critical-infrastructure attacks."
-        ),
-        "down": (
-            "Threat activity falls, vulnerabilities are patched and wars do not spill "
-            "into systemic civilian infrastructure."
-        ),
-    },
-]
-
-history = pd.DataFrame(
-    {
-        "Date": [
-            "Aug 10",
-            "Aug 20",
-            "Aug 30",
-            "Sep 4",
-            "Sep 8",
-            "Sep 11",
-            "Sep 13",
-        ],
-        "Score": [4.6, 4.9, 5.2, 5.5, 5.9, 6.2, 6.5],
-    }
-)
-
-changes = [
-    (
-        "Energy remains the highest-risk category. The issue is no longer only "
-        "Hormuz; it is the loss of redundancy if bypass routes remain impaired."
-    ),
-    (
-        "War risk is elevated because multiple theaters and maritime chokepoints "
-        "are interacting, but this is still below direct great-power war or "
-        "nuclear-use thresholds."
-    ),
-    (
-        "No category is currently at 9–10. Global financial, communications, "
-        "food-distribution and power systems continue functioning."
-    ),
-    (
-        "This dashboard tracks both escalation and de-escalation triggers so the "
-        "score can move down as well as up."
-    ),
-]
-
-pathways = [
-    (
-        "↙️",
-        "De-escalation",
-        "Pipeline repaired + shipping improves + diplomacy holds",
-        "~5–5.5",
-    ),
-    (
-        "⬇️",
-        "Muddling through",
-        "Conflict persists but key buffers remain functional",
-        "~6–6.5",
-    ),
-    (
-        "↘️",
-        "Further escalation",
-        "More chokepoints or Gulf infrastructure are disrupted",
-        "~7–7.5",
-    ),
-    (
-        "🔴",
-        "Systemic cascade",
-        "Energy shortages feed industry, food and financial stress",
-        "8+",
-    ),
-]
-
-# ---------------------------------------------------------
+# ============================================================
 # HELPERS
-# ---------------------------------------------------------
+# ============================================================
 
-def score_color(score):
+def html(block: str):
+    """Render HTML safely without indentation becoming a code block."""
+    st.markdown(textwrap.dedent(block).strip(), unsafe_allow_html=True)
+
+
+def now_pt():
+    return datetime.now(PACIFIC)
+
+
+def score_color(score: float) -> str:
     if score <= 2:
         return "#49c878"
     if score <= 5:
@@ -445,7 +232,7 @@ def score_color(score):
     return "#111111"
 
 
-def status_for(score):
+def status_for(score: float):
     if score <= 2:
         return "NORMAL", "green-pill"
     if score <= 5:
@@ -457,147 +244,562 @@ def status_for(score):
     return "CATASTROPHIC", "red-pill"
 
 
-def current_refresh_time():
-    return datetime.now().astimezone().strftime("%b %d, %Y · %I:%M:%S %p %Z")
+# ============================================================
+# FALLBACK REPORT
+# ============================================================
+
+FALLBACK_REPORT = {
+    "report_date": "September 13, 2026",
+    "checked_at": "Baseline fallback",
+    "overall_score": 6.5,
+    "overall_trend": "↗ Worsening",
+    "overall_summary": (
+        "Global systems are under unusually high, interconnected stress. "
+        "A catastrophe is not currently unfolding, but war and energy disruption "
+        "have created credible pathways to wider economic and infrastructure problems."
+    ),
+    "biggest_risk": "Energy",
+    "biggest_risk_summary": (
+        "Energy-system disruption remains the clearest near-term pathway from "
+        "regional conflict into broader global economic stress."
+    ),
+    "watch_next": "Hormuz shipping, Saudi export capacity, and regional escalation.",
+    "categories": [
+        {
+            "name": "Energy",
+            "emoji": "🛢️",
+            "score": 8.0,
+            "trend": "↑ Worsening quickly",
+            "summary": "Major shipping and export-route disruption is putting unusual pressure on energy resilience.",
+            "next_risk": "Physical fuel shortages, rationing, industrial cutbacks, and higher transport and food costs.",
+            "raises_score": "More export infrastructure is lost or chokepoints remain heavily constrained.",
+            "lowers_score": "Export routes reopen, infrastructure is restored, and safe passage becomes reliable.",
+            "sources": [],
+        },
+        {
+            "name": "War / Geopolitics",
+            "emoji": "⚔️",
+            "score": 7.5,
+            "trend": "↑ Worsening quickly",
+            "summary": "Regional conflict and attacks on strategic infrastructure create elevated escalation risk.",
+            "next_risk": "Broader regional war or additional states entering sustained combat.",
+            "raises_score": "Direct great-power confrontation, major new combatants, or nuclear escalation.",
+            "lowers_score": "Sustained ceasefire activity, negotiations, or meaningful reduction in attacks.",
+            "sources": [],
+        },
+        {
+            "name": "Economy",
+            "emoji": "💰",
+            "score": 6.0,
+            "trend": "↗ Worsening",
+            "summary": "Energy and geopolitical shocks are raising inflation and uncertainty while financial systems remain functional.",
+            "next_risk": "Stagflation, recession, or industrial disruption if energy stress persists.",
+            "raises_score": "Credit dysfunction, banking stress, mass industrial shutdowns, or sovereign defaults.",
+            "lowers_score": "Energy costs retreat and financial conditions stabilize.",
+            "sources": [],
+        },
+        {
+            "name": "Climate",
+            "emoji": "🌡️",
+            "score": 6.0,
+            "trend": "↗ Worsening",
+            "summary": "Extreme-weather risk can amplify food, energy, infrastructure, and humanitarian pressures.",
+            "next_risk": "Major simultaneous crop-region droughts, floods, or heat waves.",
+            "raises_score": "Severe multi-region agricultural or infrastructure impacts.",
+            "lowers_score": "Impacts remain limited and major harvest forecasts improve.",
+            "sources": [],
+        },
+        {
+            "name": "Food",
+            "emoji": "🌾",
+            "score": 5.0,
+            "trend": "↗ Worsening",
+            "summary": "Food systems face cost and logistics pressure, but there is no worldwide physical shortage.",
+            "next_risk": "Export restrictions and localized shortages that amplify international prices.",
+            "raises_score": "Major export bans, fertilizer shortages, or simultaneous harvest failures.",
+            "lowers_score": "Strong harvests, cheaper inputs, and improved logistics.",
+            "sources": [],
+        },
+        {
+            "name": "AI",
+            "emoji": "🤖",
+            "score": 5.0,
+            "trend": "↗ Worsening",
+            "summary": "Frontier systems are gaining autonomy-relevant capabilities but remain below actual loss-of-control conditions.",
+            "next_risk": "Reliable long-horizon autonomy, safeguard circumvention, or faster AI-assisted AI research.",
+            "raises_score": "Sustained autonomous operation, real-world control evasion, replication, or rapid AI-R&D acceleration.",
+            "lowers_score": "Capability growth slows and robust control methods survive harder evaluations.",
+            "sources": [],
+        },
+        {
+            "name": "Infrastructure / Cyber",
+            "emoji": "🏗️",
+            "score": 4.5,
+            "trend": "↗ Worsening",
+            "summary": "Regional infrastructure is under pressure while global power, communications, logistics, and payments remain broadly operational.",
+            "next_risk": "A cyber-plus-physical cascade across grids, ports, pipelines, telecoms, or payments.",
+            "raises_score": "Multi-country grid failures or destructive systemic infrastructure attacks.",
+            "lowers_score": "Threat activity falls and failures remain localized.",
+            "sources": [],
+        },
+    ],
+    "changes": [
+        "Fallback baseline is being shown because a fresh live report was unavailable.",
+        "Use Refresh Now after checking your Streamlit API secret and app logs.",
+    ],
+    "pathways": [
+        {
+            "label": "De-escalation",
+            "icon": "↙️",
+            "description": "Key infrastructure recovers and diplomacy reduces disruption.",
+            "target": "~5–5.5",
+        },
+        {
+            "label": "Muddling through",
+            "icon": "⬇️",
+            "description": "Serious tensions continue but core buffers remain functional.",
+            "target": "~6–6.5",
+        },
+        {
+            "label": "Further escalation",
+            "icon": "↘️",
+            "description": "Additional chokepoints or critical systems are disrupted.",
+            "target": "~7–7.5",
+        },
+        {
+            "label": "Systemic cascade",
+            "icon": "🔴",
+            "description": "Energy, food, industry, and financial stress begin reinforcing one another.",
+            "target": "8+",
+        },
+    ],
+}
 
 
-# ---------------------------------------------------------
-# MAIN DASHBOARD
-# ---------------------------------------------------------
+# ============================================================
+# STRUCTURED OUTPUT SCHEMA
+# ============================================================
 
-def render_dashboard():
-    refreshed_at = current_refresh_time()
+SOURCE_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "title": {"type": "string"},
+        "url": {"type": "string"},
+    },
+    "required": ["title", "url"],
+    "additionalProperties": False,
+}
+
+CATEGORY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "name": {"type": "string"},
+        "emoji": {"type": "string"},
+        "score": {"type": "number"},
+        "trend": {"type": "string"},
+        "summary": {"type": "string"},
+        "next_risk": {"type": "string"},
+        "raises_score": {"type": "string"},
+        "lowers_score": {"type": "string"},
+        "sources": {
+            "type": "array",
+            "items": SOURCE_SCHEMA,
+        },
+    },
+    "required": [
+        "name",
+        "emoji",
+        "score",
+        "trend",
+        "summary",
+        "next_risk",
+        "raises_score",
+        "lowers_score",
+        "sources",
+    ],
+    "additionalProperties": False,
+}
+
+PATHWAY_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "label": {"type": "string"},
+        "icon": {"type": "string"},
+        "description": {"type": "string"},
+        "target": {"type": "string"},
+    },
+    "required": ["label", "icon", "description", "target"],
+    "additionalProperties": False,
+}
+
+REPORT_SCHEMA = {
+    "type": "object",
+    "properties": {
+        "report_date": {"type": "string"},
+        "checked_at": {"type": "string"},
+        "overall_score": {"type": "number"},
+        "overall_trend": {"type": "string"},
+        "overall_summary": {"type": "string"},
+        "biggest_risk": {"type": "string"},
+        "biggest_risk_summary": {"type": "string"},
+        "watch_next": {"type": "string"},
+        "categories": {
+            "type": "array",
+            "items": CATEGORY_SCHEMA,
+        },
+        "changes": {
+            "type": "array",
+            "items": {"type": "string"},
+        },
+        "pathways": {
+            "type": "array",
+            "items": PATHWAY_SCHEMA,
+        },
+    },
+    "required": [
+        "report_date",
+        "checked_at",
+        "overall_score",
+        "overall_trend",
+        "overall_summary",
+        "biggest_risk",
+        "biggest_risk_summary",
+        "watch_next",
+        "categories",
+        "changes",
+        "pathways",
+    ],
+    "additionalProperties": False,
+}
+
+
+# ============================================================
+# LIVE RESEARCH PROMPT
+# ============================================================
+
+SYSTEM_INSTRUCTIONS = """
+You are the research engine for a public dashboard called "Are We Cooked?",
+which measures CURRENT global systemic risk.
+
+You MUST use web search before scoring. Research what is true right now.
+
+The dashboard is NOT a probability of extinction. It measures present systemic
+stress, remaining buffers/resilience, trajectory, and how strongly risks are
+coupled.
+
+Fixed score meanings:
+0-2 = Normal background risk
+3-5 = Elevated
+6-7 = Serious global stress
+8-9 = Critical systemic danger
+10 = A global catastrophe is actually underway
+
+Scoring rules:
+- Do not increase a score merely because a scary headline appeared.
+- Require an observable change in systemic conditions, resilience, or credible
+  near-term pathways before materially changing a score.
+- Explicitly credit improvements, restored infrastructure, de-escalation,
+  replenished buffers, successful negotiations, and improving conditions.
+- Distinguish current severity from future possibility.
+- Avoid sensationalism.
+- If evidence is mixed or uncertain, say so and score conservatively.
+- Prefer Reuters, AP, AFP, BBC, major financial publications, official agencies,
+  international organizations, peer-reviewed or primary technical sources,
+  and first-party AI lab safety/research publications.
+- Favor the last 24 hours for fast-moving war, energy, finance, infrastructure,
+  and cyber developments. Use authoritative recent sources for climate, food,
+  and AI where appropriate.
+- Each category should include 1-3 useful real source URLs.
+
+AI-specific rule:
+Do not score AI based only on hypothetical future superintelligence. Score
+observable current capabilities, deployment, autonomy, control failures,
+AI-enabled cyber/bio risk, and AI-assisted AI R&D.
+
+Return EXACTLY these seven categories, in this order:
+1. Energy — 🛢️
+2. War / Geopolitics — ⚔️
+3. Economy — 💰
+4. Climate — 🌡️
+5. Food — 🌾
+6. AI — 🤖
+7. Infrastructure / Cyber — 🏗️
+
+For each category:
+- score must be between 0 and 10
+- trend must be exactly one of:
+  "↓ Improving"
+  "→ Stable"
+  "↗ Worsening"
+  "↑ Worsening quickly"
+- summary should be 1-2 concise sentences
+- next_risk should describe the most plausible next-stage risk, not the
+  theatrical worst case
+- raises_score and lowers_score must be concrete observable triggers
+
+Overall score:
+Do NOT simply average the categories. Consider coupling and cascades.
+Normally the overall score should remain below the most severe category unless
+several major systems are simultaneously deteriorating.
+
+Changes:
+Give 2-5 concise bullets describing what materially changed in the newest data.
+If nothing important changed, explicitly say conditions are broadly unchanged.
+
+Pathways:
+Return exactly four entries named:
+De-escalation
+Muddling through
+Further escalation
+Systemic cascade
+
+The current date/time supplied by the app is authoritative.
+"""
+
+
+# ============================================================
+# OPENAI / WEB SEARCH
+# ============================================================
+
+def prior_report_summary():
+    previous = st.session_state.get("last_good_report")
+    if not previous:
+        return "No prior live report exists in this browser session."
+
+    prior = {
+        "overall_score": previous.get("overall_score"),
+        "overall_trend": previous.get("overall_trend"),
+        "categories": [
+            {
+                "name": c.get("name"),
+                "score": c.get("score"),
+                "trend": c.get("trend"),
+            }
+            for c in previous.get("categories", [])
+        ],
+    }
+    return json.dumps(prior, ensure_ascii=False)
+
+
+@st.cache_data(ttl=900, show_spinner=False)
+def fetch_live_report():
+    if "OPENAI_API_KEY" not in st.secrets:
+        raise RuntimeError(
+            "OPENAI_API_KEY is missing from Streamlit Secrets."
+        )
+
+    client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+    current = now_pt()
+
+    prompt = f"""
+Current Pacific time: {current.strftime("%A, %B %d, %Y at %I:%M %p %Z")}
+
+Research the current global situation and generate a fresh Are We Cooked?
+dashboard report.
+
+Prior session baseline, if available:
+{prior_report_summary()}
+
+Use web search extensively enough to assess all seven categories. Prioritize
+freshness for fast-moving categories. Return only the structured report.
+"""
+
+    response = client.responses.create(
+        model=MODEL,
+        reasoning={"effort": "low"},
+        tools=[
+            {
+                "type": "web_search",
+                "search_context_size": "medium",
+            }
+        ],
+        input=[
+            {
+                "role": "system",
+                "content": SYSTEM_INSTRUCTIONS,
+            },
+            {
+                "role": "user",
+                "content": prompt,
+            },
+        ],
+        text={
+            "format": {
+                "type": "json_schema",
+                "name": "are_we_cooked_report",
+                "strict": True,
+                "schema": REPORT_SCHEMA,
+            }
+        },
+    )
+
+    report = json.loads(response.output_text)
+
+    # Basic guardrails in case a model output somehow slips outside bounds.
+    report["overall_score"] = max(0, min(10, float(report["overall_score"])))
+
+    for category in report.get("categories", []):
+        category["score"] = max(0, min(10, float(category["score"])))
+
+    # Stamp the actual app-side research time too.
+    report["checked_at"] = current.strftime("%b %d, %Y · %I:%M %p %Z")
+
+    return report
+
+
+# ============================================================
+# SESSION HISTORY
+# ============================================================
+
+if "last_good_report" not in st.session_state:
+    st.session_state.last_good_report = None
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+if "last_report_key" not in st.session_state:
+    st.session_state.last_report_key = None
+
+
+def record_history(report):
+    key = report.get("checked_at")
+
+    if not key or key == st.session_state.last_report_key:
+        return
+
+    st.session_state.last_report_key = key
+    st.session_state.history.append(
+        {
+            "Checked": key,
+            "Score": float(report["overall_score"]),
+        }
+    )
+
+    # Keep chart tidy inside a single browser session.
+    st.session_state.history = st.session_state.history[-40:]
+
+
+# ============================================================
+# SOURCES
+# ============================================================
+
+def render_sources(sources):
+    if not sources:
+        st.caption("No source links were returned for this category.")
+        return
+
+    for source in sources:
+        title = source.get("title", "Source")
+        url = source.get("url", "")
+
+        if url.startswith("http://") or url.startswith("https://"):
+            st.markdown(f"- [{title}]({url})")
+        else:
+            st.markdown(f"- {title}")
+
+
+# ============================================================
+# DASHBOARD RENDERING
+# ============================================================
+
+def render_dashboard(report):
+    score = float(report["overall_score"])
+    status, pill = status_for(score)
 
     # HEADER
-    left, right = st.columns([4.5, 1.5], vertical_alignment="top")
+    left, right = st.columns([4.5, 1.6], vertical_alignment="top")
 
     with left:
-        st.markdown(
-            '<div class="eyebrow">GLOBAL RISK DASHBOARD</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            '<div class="hero-title">Are We Cooked? 🌍</div>',
-            unsafe_allow_html=True,
-        )
-        st.markdown(
-            """
-            <div class="subtitle">
-                A sober look at global systemic risk — without turning every scary
-                headline into apocalypse.
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        html("""
+        <div class="eyebrow">GLOBAL RISK DASHBOARD</div>
+        <div class="hero-title">Are We Cooked? 🌍</div>
+        <div class="subtitle">
+            A sober look at global systemic risk — without turning every scary
+            headline into apocalypse.
+        </div>
+        """)
 
     with right:
-        st.markdown(
-            f"""
-            <div class="panel" style="padding:14px 16px;">
-                <div class="mini-label">REPORT DATE</div>
-                <div style="font-weight:800;">{AS_OF}</div>
-                <div class="refresh-meta">
-                    Last refreshed:<br>
-                    {refreshed_at}
-                </div>
+        html(f"""
+        <div class="panel" style="padding:14px 16px;">
+            <div class="mini-label">LIVE REPORT</div>
+            <div style="font-weight:800;">{report.get("report_date", "")}</div>
+            <div class="refresh-meta">
+                Last researched:<br>
+                {report.get("checked_at", "Unknown")}
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+        </div>
+        """)
 
-    # REFRESH BUTTON
-    refresh_col, note_col = st.columns([1, 5], vertical_alignment="center")
+    # REFRESH CONTROLS
+    refresh_col, note_col = st.columns([1.2, 5], vertical_alignment="center")
 
     with refresh_col:
         if st.button(
             "🔄 Refresh Now",
             use_container_width=True,
             type="primary",
+            key="manual_refresh",
         ):
+            fetch_live_report.clear()
+            st.session_state.force_refresh = True
             st.rerun()
 
     with note_col:
-        st.caption("Auto-refreshes every 15 minutes while this page is open.")
+        st.caption(
+            "The dashboard researches fresh data automatically every 15 minutes "
+            "while this page is open. Refresh Now forces a new research run."
+        )
 
     # HERO
     c1, c2 = st.columns([1.7, 1], gap="large")
 
     with c1:
-        status, pill = status_for(OVERALL_SCORE)
+        html(f"""
+        <div class="panel">
+            <div class="mini-label">OVERALL GLOBAL RISK</div>
 
-        st.markdown(
-            f"""
-            <div class="panel">
-                <div class="mini-label">OVERALL GLOBAL RISK</div>
-
-                <div class="big-score">
-                    {OVERALL_SCORE:.1f}
-                    <span style="font-size:1.4rem;color:#8f9aa5;">
-                        / 10
-                    </span>
-                </div>
-
-                <div style="margin:.8rem 0 1rem 0;">
-                    <span class="status-pill {pill}">
-                        {status}
-                    </span>
-
-                    <span style="
-                        color:{score_color(OVERALL_SCORE)};
-                        font-weight:800;
-                    ">
-                        {OVERALL_TREND}
-                    </span>
-                </div>
-
-                <div style="
-                    color:#c4ccd3;
-                    line-height:1.65;
-                ">
-                    {OVERALL_SUMMARY}
-                </div>
+            <div class="big-score">
+                {score:.1f}
+                <span style="font-size:1.4rem;color:#8f9aa5;"> / 10</span>
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+
+            <div style="margin:.8rem 0 1rem 0;">
+                <span class="status-pill {pill}">{status}</span>
+                <span style="color:{score_color(score)};font-weight:800;">
+                    {report.get("overall_trend", "→ Stable")}
+                </span>
+            </div>
+
+            <div style="color:#c4ccd3;line-height:1.65;">
+                {report.get("overall_summary", "")}
+            </div>
+        </div>
+        """)
 
     with c2:
-        st.markdown(
-            """
-            <div class="panel spotlight">
-                <div class="mini-label">
-                    🔥 BIGGEST RISK RIGHT NOW
-                </div>
+        html(f"""
+        <div class="panel spotlight">
+            <div class="mini-label">🔥 BIGGEST RISK RIGHT NOW</div>
 
-                <h2 style="margin:.35rem 0 .6rem 0;">
-                    Energy
-                </h2>
+            <h2 style="margin:.35rem 0 .6rem 0;">
+                {report.get("biggest_risk", "Unknown")}
+            </h2>
 
-                <div style="
-                    color:#c4ccd3;
-                    line-height:1.6;
-                ">
-                    Hormuz disruption plus impaired Saudi bypass capacity
-                    is the clearest near-term pathway from serious regional
-                    conflict to broader global economic stress.
-                </div>
-
-                <div style="
-                    margin-top:1rem;
-                    font-weight:800;
-                ">
-                    👀 Watch: Saudi pipeline + Hormuz
-                </div>
+            <div style="color:#c4ccd3;line-height:1.6;">
+                {report.get("biggest_risk_summary", "")}
             </div>
-            """,
-            unsafe_allow_html=True,
-        )
+
+            <div style="margin-top:1rem;font-weight:800;">
+                👀 Watch: {report.get("watch_next", "")}
+            </div>
+        </div>
+        """)
 
     # CATEGORY CARDS
-    st.markdown(
-        '<div class="section-title">Risk by category</div>',
-        unsafe_allow_html=True,
-    )
+    html('<div class="section-title">Risk by category</div>')
+
+    categories = report.get("categories", [])
 
     for i in range(0, len(categories), 2):
         cols = st.columns(2, gap="large")
@@ -609,282 +811,248 @@ def render_dashboard():
                 break
 
             item = categories[idx]
+            item_score = float(item["score"])
 
             with col:
-                status, pill = status_for(item["score"])
-
-                st.markdown(
-                    f"""
-                    <div class="metric-card">
-                        <div style="
-                            display:flex;
-                            justify-content:space-between;
-                            gap:18px;
-                            align-items:flex-start;
-                        ">
-                            <div>
-                                <div class="risk-name">
-                                    {item["emoji"]} {item["name"]}
-                                </div>
-
-                                <div style="
-                                    color:{score_color(item["score"])};
-                                    font-weight:800;
-                                    font-size:.84rem;
-                                ">
-                                    {item["trend"]}
-                                </div>
+                html(f"""
+                <div class="metric-card">
+                    <div style="
+                        display:flex;
+                        justify-content:space-between;
+                        gap:18px;
+                        align-items:flex-start;
+                    ">
+                        <div>
+                            <div class="risk-name">
+                                {item.get("emoji","")} {item.get("name","")}
                             </div>
 
-                            <div style="text-align:right;">
-                                <div class="risk-score">
-                                    {item["score"]:.1f}
-                                </div>
-
-                                <div class="muted" style="font-size:.74rem;">
-                                    / 10
-                                </div>
-                            </div>
-                        </div>
-
-                        <div style="margin:.8rem 0;">
                             <div style="
-                                height:8px;
-                                background:#252d34;
-                                border-radius:999px;
-                                overflow:hidden;
+                                color:{score_color(item_score)};
+                                font-weight:800;
+                                font-size:.84rem;
                             ">
-                                <div style="
-                                    width:{item["score"] * 10}%;
-                                    height:100%;
-                                    background:{score_color(item["score"])};
-                                ">
-                                </div>
+                                {item.get("trend","→ Stable")}
                             </div>
                         </div>
 
-                        <div style="
-                            color:#c5cdd4;
-                            line-height:1.55;
-                            font-size:.93rem;
-                        ">
-                            {item["summary"]}
+                        <div style="text-align:right;">
+                            <div class="risk-score">{item_score:.1f}</div>
+                            <div class="muted" style="font-size:.74rem;">/ 10</div>
                         </div>
                     </div>
-                    """,
-                    unsafe_allow_html=True,
-                )
 
-                with st.expander(
-                    "Show next risk + escalation triggers"
-                ):
+                    <div style="margin:.8rem 0;">
+                        <div style="
+                            height:8px;
+                            background:#252d34;
+                            border-radius:999px;
+                            overflow:hidden;
+                        ">
+                            <div style="
+                                width:{item_score * 10}%;
+                                height:100%;
+                                background:{score_color(item_score)};
+                            "></div>
+                        </div>
+                    </div>
+
+                    <div style="
+                        color:#c5cdd4;
+                        line-height:1.55;
+                        font-size:.93rem;
+                    ">
+                        {item.get("summary","")}
+                    </div>
+                </div>
+                """)
+
+                with st.expander("Next risk + escalation triggers + sources"):
                     st.markdown(
-                        f"**Next plausible risk:** {item['next']}"
+                        f"**Next plausible risk:** {item.get('next_risk','')}"
                     )
                     st.markdown(
-                        f"**⬆️ Raises score:** {item['up']}"
+                        f"**⬆️ Raises score:** {item.get('raises_score','')}"
                     )
                     st.markdown(
-                        f"**⬇️ Lowers score:** {item['down']}"
+                        f"**⬇️ Lowers score:** {item.get('lowers_score','')}"
                     )
+                    st.markdown("**Sources:**")
+                    render_sources(item.get("sources", []))
+
+    # WHAT CHANGED
+    html('<div class="section-title">What changed in the latest check?</div>')
+
+    changes = report.get("changes", [])
+    if changes:
+        for change in changes:
+            st.markdown(f"- {change}")
+    else:
+        st.markdown("- No material change was identified.")
 
     # HISTORY + PATHWAYS
-    st.markdown(
-        '<div class="section-title">Where this could go next</div>',
-        unsafe_allow_html=True,
-    )
+    html('<div class="section-title">Where this could go next</div>')
 
     left, right = st.columns([1.45, 1], gap="large")
 
     with left:
-        st.markdown(
-            '<div class="mini-label">📈 RISK HISTORY</div>',
-            unsafe_allow_html=True,
-        )
+        html('<div class="mini-label">📈 SESSION RISK HISTORY</div>')
 
-        fig = px.line(
-            history,
-            x="Date",
-            y="Score",
-            markers=True,
-            range_y=[0, 10],
-        )
+        history_rows = st.session_state.history
 
-        fig.update_traces(
-            line=dict(width=4),
-            marker=dict(size=9),
-        )
+        if len(history_rows) >= 2:
+            history_df = pd.DataFrame(history_rows)
 
-        fig.update_layout(
-            paper_bgcolor="rgba(0,0,0,0)",
-            plot_bgcolor="rgba(0,0,0,0)",
-            font_color="#dfe5ea",
-            margin=dict(
-                l=10,
-                r=10,
-                t=10,
-                b=10,
-            ),
-            height=330,
-            xaxis=dict(
-                showgrid=False,
-                title=None,
-            ),
-            yaxis=dict(
-                gridcolor="#26303a",
-                title=None,
-                dtick=2,
-            ),
-            showlegend=False,
-        )
-
-        st.plotly_chart(
-            fig,
-            use_container_width=True,
-        )
-
-    with right:
-        st.markdown(
-            '<div class="mini-label">🧭 MOST PLAUSIBLE NEXT PATH</div>',
-            unsafe_allow_html=True,
-        )
-
-        for icon, name, detail, target in pathways:
-            st.markdown(
-                f"""
-                <div class="detail-box">
-                    <div style="
-                        display:flex;
-                        justify-content:space-between;
-                        gap:14px;
-                        align-items:center;
-                    ">
-                        <div>
-                            <div style="font-weight:800;">
-                                {icon} {name}
-                            </div>
-
-                            <div class="muted" style="
-                                font-size:.82rem;
-                                margin-top:3px;
-                            ">
-                                {detail}
-                            </div>
-                        </div>
-
-                        <div style="
-                            font-size:1.15rem;
-                            font-weight:800;
-                        ">
-                            {target}
-                        </div>
-                    </div>
-                </div>
-                """,
-                unsafe_allow_html=True,
+            fig = px.line(
+                history_df,
+                x="Checked",
+                y="Score",
+                markers=True,
+                range_y=[0, 10],
             )
 
-    # CHANGES
-    st.markdown(
-        '<div class="section-title">What changed since the last report?</div>',
-        unsafe_allow_html=True,
-    )
+            fig.update_traces(
+                line=dict(width=4),
+                marker=dict(size=9),
+            )
 
-    for change in changes:
-        st.markdown(f"- {change}")
+            fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(0,0,0,0)",
+                font_color="#dfe5ea",
+                margin=dict(l=10, r=10, t=10, b=10),
+                height=330,
+                xaxis=dict(showgrid=False, title=None, tickangle=-20),
+                yaxis=dict(gridcolor="#26303a", title=None, dtick=2),
+                showlegend=False,
+            )
+
+            st.plotly_chart(fig, use_container_width=True)
+
+            st.caption(
+                "This chart records successful live checks in the current "
+                "Streamlit browser session."
+            )
+        else:
+            st.info(
+                "History will start plotting after the dashboard has completed "
+                "at least two successful live research checks."
+            )
+
+    with right:
+        html('<div class="mini-label">🧭 MOST PLAUSIBLE NEXT PATHS</div>')
+
+        for pathway in report.get("pathways", []):
+            html(f"""
+            <div class="detail-box">
+                <div style="
+                    display:flex;
+                    justify-content:space-between;
+                    gap:14px;
+                    align-items:center;
+                ">
+                    <div>
+                        <div style="font-weight:800;">
+                            {pathway.get("icon","")} {pathway.get("label","")}
+                        </div>
+
+                        <div class="muted" style="
+                            font-size:.82rem;
+                            margin-top:3px;
+                        ">
+                            {pathway.get("description","")}
+                        </div>
+                    </div>
+
+                    <div style="font-size:1.15rem;font-weight:800;">
+                        {pathway.get("target","")}
+                    </div>
+                </div>
+            </div>
+            """)
 
     # SCORE KEY
-    st.markdown(
-        '<div class="section-title">How to read the meter</div>',
-        unsafe_allow_html=True,
-    )
+    html('<div class="section-title">How to read the meter</div>')
 
     k1, k2, k3, k4, k5 = st.columns(5)
 
     key_items = [
-        (
-            k1,
-            "0–2",
-            "Normal",
-            "#49c878",
-        ),
-        (
-            k2,
-            "3–5",
-            "Elevated",
-            "#e8c547",
-        ),
-        (
-            k3,
-            "6–7",
-            "Serious",
-            "#f29f3d",
-        ),
-        (
-            k4,
-            "8–9",
-            "Critical",
-            "#ef5c5c",
-        ),
-        (
-            k5,
-            "10",
-            "Catastrophic",
-            "#111111",
-        ),
+        (k1, "0–2", "Normal", "#49c878"),
+        (k2, "3–5", "Elevated", "#e8c547"),
+        (k3, "6–7", "Serious", "#f29f3d"),
+        (k4, "8–9", "Critical", "#ef5c5c"),
+        (k5, "10", "Catastrophic", "#111111"),
     ]
 
     for col, label, desc, color in key_items:
         with col:
-            st.markdown(
-                f"""
-                <div class="panel" style="padding:14px;">
-                    <div style="
-                        height:6px;
-                        background:{color};
-                        border-radius:999px;
-                        margin-bottom:10px;
-                    ">
-                    </div>
+            html(f"""
+            <div class="panel" style="padding:14px;">
+                <div style="
+                    height:6px;
+                    background:{color};
+                    border-radius:999px;
+                    margin-bottom:10px;
+                "></div>
 
-                    <div style="
-                        font-size:1.3rem;
-                        font-weight:800;
-                    ">
-                        {label}
-                    </div>
-
-                    <div class="muted" style="font-size:.8rem;">
-                        {desc}
-                    </div>
+                <div style="font-size:1.3rem;font-weight:800;">
+                    {label}
                 </div>
-                """,
-                unsafe_allow_html=True,
-            )
 
-    st.markdown(
-        """
-        <div class="footer-note">
-            <strong>Important:</strong>
-            This is an analytical index, not a probability of human extinction.
-            Scores are intended to reflect current systemic stress, resilience,
-            and how risks interact with one another.
+                <div class="muted" style="font-size:.8rem;">
+                    {desc}
+                </div>
+            </div>
+            """)
 
-            New scary headlines should not raise the meter unless they actually
-            cross a defined threshold.
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+    html("""
+    <div class="footer-note">
+        <strong>Important:</strong>
+        This is an analytical index, not a probability of human extinction.
+        Scores reflect current systemic stress, resilience, trajectory, and
+        interactions between risks. A frightening headline by itself should
+        not move the meter unless it changes underlying conditions.
+    </div>
+    """)
 
 
-# ---------------------------------------------------------
-# AUTO REFRESH
-# ---------------------------------------------------------
+# ============================================================
+# LIVE AUTO-REFRESH
+# ============================================================
 
 @st.fragment(run_every="15m")
-def auto_refresh_dashboard():
-    render_dashboard()
+def live_dashboard():
+    try:
+        with st.spinner("Researching the latest global conditions…"):
+            report = fetch_live_report()
+
+        st.session_state.last_good_report = report
+        record_history(report)
+
+        render_dashboard(report)
+
+    except Exception as exc:
+        previous = st.session_state.last_good_report
+
+        if previous:
+            st.warning(
+                "The latest research refresh failed, so the dashboard is "
+                "showing the last successful live report."
+            )
+            with st.expander("Technical error"):
+                st.code(str(exc))
+
+            render_dashboard(previous)
+
+        else:
+            st.error(
+                "The live research check failed. I’m showing the built-in "
+                "baseline so the dashboard still works."
+            )
+            with st.expander("Technical error"):
+                st.code(str(exc))
+
+            render_dashboard(FALLBACK_REPORT)
 
 
-auto_refresh_dashboard()
+live_dashboard()
