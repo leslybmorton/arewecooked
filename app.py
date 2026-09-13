@@ -332,6 +332,145 @@ def dynamic_potentials(name, articles, cfg):
     return {"up": cfg["up"], "down": cfg["down"], "next": cfg["next"]}
 
 
+
+def _contains_any(blob, terms):
+    return any(t.lower() in blob for t in terms)
+
+
+def _count_domains(articles):
+    return len({(a.get("domain") or "").lower().strip() for a in articles if a.get("domain")})
+
+
+def scenario_score(name, cfg, articles):
+    """
+    Score CONDITIONS, not keyword volume.
+    A single confirmed high-impact condition can matter more than 20 vague headlines.
+    Returns: score, list of detected condition labels.
+    """
+    blob = " ".join(a.get("title", "").lower() for a in articles)
+    domains = _count_domains(articles)
+    score = float(cfg["base"])
+    detected = []
+
+    confirmed_words = [
+        "confirmed", "closed", "closure", "shut", "shutdown", "halted", "suspended",
+        "destroyed", "damaged", "hit", "struck", "attack", "attacked", "blocked",
+        "blockade", "disrupted", "disruption", "outage", "rationing", "shortage"
+    ]
+    confirmed = _contains_any(blob, confirmed_words)
+
+    if name == "Energy":
+        if _contains_any(blob, ["strait of hormuz", "hormuz"]):
+            if _contains_any(blob, ["closed", "closure", "blockade", "blocked", "shipping halted", "traffic halted"]):
+                score = max(score, 9.0); detected.append("Hormuz closure/blockade")
+            elif _contains_any(blob, ["attack", "tanker", "shipping disruption", "ships reroute", "war risk insurance"]):
+                score = max(score, 7.5); detected.append("Hormuz/tanker disruption risk")
+            else:
+                score = max(score, 6.0); detected.append("Hormuz under elevated threat")
+
+        if _contains_any(blob, ["refinery", "pipeline", "export terminal", "oil field", "lng terminal"]):
+            if confirmed and _contains_any(blob, ["shutdown", "outage", "damaged", "attack", "halted"]):
+                score = max(score, 7.0); detected.append("Physical energy infrastructure loss")
+
+        if _contains_any(blob, ["rationing", "fuel shortage", "diesel shortage", "gasoline shortage"]):
+            score = max(score, 8.0); detected.append("Physical fuel shortage/rationing")
+
+        if _contains_any(blob, ["oil price spike", "oil surges", "crude surges", "brent surges"]):
+            score = max(score, 6.0); detected.append("Sharp energy-price shock")
+
+    elif name == "War / Geopolitics":
+        if _contains_any(blob, ["iran"]) and _contains_any(blob, ["israel"]) and _contains_any(blob, ["attack", "strike", "missile", "drone", "bomb"]):
+            score = max(score, 7.5); detected.append("Direct Iran–Israel military exchange")
+
+        if _contains_any(blob, ["nato"]) and _contains_any(blob, ["russia"]) and _contains_any(blob, ["attack", "strike", "combat", "troops"]):
+            score = max(score, 8.5); detected.append("Direct NATO–Russia confrontation risk")
+
+        if _contains_any(blob, ["taiwan"]) and _contains_any(blob, ["blockade", "invasion", "encirclement", "live-fire"]):
+            score = max(score, 8.0); detected.append("Taiwan blockade/invasion signal")
+
+        if _contains_any(blob, ["nuclear", "nuclear weapon", "nuclear forces", "nuclear strike"]):
+            score = max(score, 9.0); detected.append("Nuclear escalation signal")
+
+        if _contains_any(blob, ["mobilization", "new front", "another country", "regional war", "wider war"]):
+            score = max(score, 7.0); detected.append("Conflict widening")
+
+        if _contains_any(blob, ["ceasefire", "truce"]) and _contains_any(blob, ["agreed", "signed", "begins", "takes effect", "holds"]):
+            score = max(cfg["base"], score - 1.0); detected.append("Verified de-escalation")
+
+    elif name == "Economy":
+        if _contains_any(blob, ["bank failure", "bank collapses", "bank run", "emergency liquidity"]):
+            score = max(score, 7.0); detected.append("Banking-system stress")
+        if _contains_any(blob, ["credit freeze", "liquidity crisis", "sovereign default", "debt default"]):
+            score = max(score, 7.5); detected.append("Credit/default stress")
+        if _contains_any(blob, ["market crash", "stocks plunge", "stocks tumble", "circuit breaker"]):
+            score = max(score, 6.5); detected.append("Severe market stress")
+        if _contains_any(blob, ["recession"]) and _contains_any(blob, ["confirmed", "enters", "official", "contraction"]):
+            score = max(score, 5.5); detected.append("Confirmed recession")
+        if _contains_any(blob, ["inflation"]) and _contains_any(blob, ["surges", "accelerates", "spike", "highest"]):
+            score = max(score, 5.5); detected.append("Inflation re-acceleration")
+
+    elif name == "Climate":
+        multi_hazard = sum(
+            _contains_any(blob, group) for group in [
+                ["heatwave", "extreme heat"],
+                ["wildfire", "fires"],
+                ["flood", "flooding"],
+                ["drought"],
+                ["hurricane", "cyclone", "typhoon"],
+            ]
+        )
+        if multi_hazard >= 3:
+            score = max(score, 6.5); detected.append("Multiple major climate hazards")
+        elif multi_hazard >= 2:
+            score = max(score, 5.5); detected.append("Concurrent climate hazards")
+        if _contains_any(blob, ["record heat", "record temperature", "catastrophic flood", "megadrought"]):
+            score = max(score, 6.0); detected.append("Extreme climate anomaly")
+        if _contains_any(blob, ["crop losses", "power outages", "grid emergency", "mass evacuation"]):
+            score = max(score, 6.5); detected.append("Climate spillover into food/infrastructure")
+
+    elif name == "Food":
+        if _contains_any(blob, ["famine"]):
+            score = max(score, 8.0); detected.append("Famine conditions")
+        if _contains_any(blob, ["export ban", "exports banned", "export restrictions"]):
+            score = max(score, 6.0); detected.append("Staple-food export restrictions")
+        if _contains_any(blob, ["crop failure", "harvest failure", "failed harvest"]):
+            score = max(score, 6.5); detected.append("Major crop failure")
+        if _contains_any(blob, ["food shortage", "grain shortage", "rice shortage", "wheat shortage"]):
+            score = max(score, 7.0); detected.append("Physical food shortage")
+        if _contains_any(blob, ["food prices surge", "food prices spike", "record food prices"]):
+            score = max(score, 5.5); detected.append("Food-price shock")
+
+    elif name == "AI":
+        if _contains_any(blob, ["self-replication", "self replication", "autonomous replication"]):
+            score = max(score, 7.5); detected.append("Autonomous replication capability")
+        if _contains_any(blob, ["ai cyberattack", "ai-enabled cyberattack", "autonomous cyberattack"]):
+            score = max(score, 7.0); detected.append("Consequential AI-enabled cyber incident")
+        if _contains_any(blob, ["biosecurity", "bioweapon", "biological weapon"]) and _contains_any(blob, ["ai", "model"]):
+            score = max(score, 7.0); detected.append("AI biosecurity concern")
+        if _contains_any(blob, ["safeguard bypass", "control failure", "escaped sandbox", "model exfiltration"]):
+            score = max(score, 7.0); detected.append("Control/safeguard failure")
+        if _contains_any(blob, ["agentic", "autonomous agent", "long-horizon"]):
+            score = max(score, 5.5); detected.append("Rising autonomous-agent capability")
+
+    elif name == "Infrastructure / Cyber":
+        if _contains_any(blob, ["nationwide blackout", "grid collapse", "power grid attack"]):
+            score = max(score, 8.0); detected.append("Large-scale grid disruption")
+        if _contains_any(blob, ["hospital ransomware", "port shutdown", "telecom outage", "payment outage"]):
+            score = max(score, 6.5); detected.append("Critical-service disruption")
+        if _contains_any(blob, ["critical infrastructure"]) and _contains_any(blob, ["attack", "ransomware", "outage", "shutdown"]):
+            score = max(score, 6.5); detected.append("Critical-infrastructure cyber incident")
+        if _contains_any(blob, ["multiple countries", "widespread outage", "cascading outage"]):
+            score = max(score, 7.5); detected.append("Cross-region infrastructure cascade")
+
+    # Confidence bump only when multiple independent sources are covering a detected condition.
+    if detected and domains >= 6:
+        score += 0.5
+    elif detected and domains >= 3:
+        score += 0.25
+
+    return round(clamp(score) * 2) / 2, detected
+
+
 def score_news(name, cfg, articles, source_state, previous=None):
     if not articles:
         # Critical rule: source failure is NOT zero risk.
@@ -342,24 +481,25 @@ def score_news(name, cfg, articles, source_state, previous=None):
             "trend":"→ Unchanged (data unavailable)",
             "summary":"Fresh news data is unavailable. Keeping the last known/baseline score — not treating missing data as good news.",
             "next_risk":p["next"],"raises_score":p["up"],"lowers_score":p["down"],
-            "signals":[],"data_status":"unavailable"
+            "signals":[],"data_status":"unavailable","detected_conditions":[]
         }
 
-    blob = " ".join(x["title"].lower() for x in articles)
-    bad = sum(1 for k in cfg["bad"] if k.lower() in blob)
-    good = sum(1 for k in cfg["good"] if k.lower() in blob)
-
-    # Headlines are a modifier, never the whole score.
-    adjustment = min(2.0, bad * .35) - min(1.0, good * .25)
-    score = round(clamp(cfg["base"] + adjustment)*2)/2
-
+    score, detected = scenario_score(name, cfg, articles)
     p = dynamic_potentials(name, articles, cfg)
+
+    if detected:
+        condition_text = "; ".join(detected[:3])
+        summary = f"{len(articles)} fresh reports checked. Conditions detected: {condition_text}."
+    else:
+        summary = f"{len(articles)} fresh reports checked. No high-impact condition crossed a scoring threshold."
+
     return {
         "name":name,"emoji":cfg["emoji"],"score":score,
         "trend":trend(score, previous),
-        "summary":f"Fresh public-news signals: {len(articles)} items checked; {bad} escalation terms and {good} easing terms detected.",
+        "summary":summary,
         "next_risk":p["next"],"raises_score":p["up"],"lowers_score":p["down"],
-        "signals":articles[:5],"data_status":source_state
+        "signals":articles[:5],"data_status":source_state,
+        "detected_conditions":detected
     }
 
 
@@ -420,13 +560,32 @@ def build_report():
     }
     available = [c for c in categories if c["data_status"] != "unavailable"]
     scores = {c["name"]:c["score"] for c in categories}
-    overall = sum(scores[n]*weights[n] for n in scores)/sum(weights.values())
+
+    weighted_avg = sum(scores[n]*weights[n] for n in scores)/sum(weights.values())
+    top3 = sorted(scores.values(), reverse=True)[:3]
+    top3_avg = sum(top3)/len(top3)
+
+    # Systemic risk should care about concentrated severe stress, not just the average.
+    overall = (weighted_avg * .70) + (top3_avg * .30)
 
     severe = sum(s >= 7 for s in scores.values())
     elevated = sum(s >= 5.5 for s in scores.values())
+
+    # Coupling bonuses: multiple stressed systems can create cascades.
     if severe >= 2: overall += .5
     if severe >= 3: overall += .5
-    if elevated >= 5: overall += .35
+    if elevated >= 4: overall += .35
+
+    # Explicit cross-system couplings.
+    if scores["Energy"] >= 7 and scores["War / Geopolitics"] >= 7:
+        overall += .4
+    if scores["Energy"] >= 7 and scores["Economy"] >= 5.5:
+        overall += .25
+    if scores["Climate"] >= 6 and scores["Food"] >= 5.5:
+        overall += .25
+    if scores["Infrastructure / Cyber"] >= 7 and scores["Economy"] >= 5.5:
+        overall += .25
+
     overall = round(clamp(overall)*2)/2
 
     prev_overall = prev_report.get("overall_score") if prev_report else None
@@ -555,7 +714,7 @@ def render(report):
 
 **Important:** a broken/missing feed never counts as “everything is fine.” The app keeps the last known score (or a conservative baseline on the first run) and labels the category **DATA UNAVAILABLE**.
 
-Headlines only make capped adjustments to fixed baselines. Official NOAA/FAO data gets more weight where available. This is a situational-awareness index, not an extinction probability.
+Scores are driven by detected real-world conditions (for example: a confirmed chokepoint closure, physical shortages, direct state-on-state escalation, banking stress, or cascading outages), not by counting scary words. Multiple stressed systems add a coupling penalty because crises can amplify each other. Official NOAA/FAO data gets more weight where available. This is a situational-awareness index, not an extinction probability.
         """)
         st.markdown(f"- [NOAA ENSO Discussion]({NOAA})")
         st.markdown(f"- [FAO Food Price Index]({FAO})")
